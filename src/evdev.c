@@ -37,9 +37,7 @@
 #include <X11/keysym.h>
 #include <X11/extensions/XI.h>
 
-#include <linux/version.h>
 #include <sys/stat.h>
-#include <libudev.h>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -225,36 +223,7 @@ EvdevIsDuplicate(InputInfoPtr pInfo)
 static BOOL
 EvdevDeviceIsVirtual(const char* devicenode)
 {
-    struct udev *udev = NULL;
-    struct udev_device *device = NULL;
-    struct stat st;
-    int rc = FALSE;
-    const char *devpath;
-
-    udev = udev_new();
-    if (!udev)
-        goto out;
-
-    if (stat(devicenode, &st) == -1)
-        goto out;
-
-    device = udev_device_new_from_devnum(udev, 'c', st.st_rdev);
-
-    if (!device)
-        goto out;
-
-
-    devpath = udev_device_get_devpath(device);
-    if (!devpath)
-        goto out;
-
-    if (strstr(devpath, "LNXSYSTM"))
-        rc = TRUE;
-
-out:
-    udev_device_unref(device);
-    udev_unref(udev);
-    return rc;
+    return FALSE;
 }
 
 
@@ -1451,10 +1420,8 @@ EvdevAddAbsValuatorClass(DeviceIntPtr device, int num_scroll_axes)
             continue;
 
         abs = libevdev_get_abs_info(pEvdev->dev, axis);
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 30)
         /* Kernel provides units/mm, X wants units/m */
         resolution = abs->resolution * 1000;
-#endif
 
         xf86InitValuatorAxisStruct(device, axnum,
                                    atoms[axnum],
@@ -2102,8 +2069,8 @@ EvdevProbe(InputInfoPtr pInfo)
     int rc = 1;
 
     xf86IDrvMsg(pInfo, X_PROBED, "Vendor %#hx Product %#hx\n",
-                libevdev_get_id_vendor(pEvdev->dev),
-                libevdev_get_id_product(pEvdev->dev));
+                (unsigned short) libevdev_get_id_vendor(pEvdev->dev),
+                (unsigned short) libevdev_get_id_product(pEvdev->dev));
 
     /* Trinary state for ignoring axes:
        - unset: do the normal thing.
