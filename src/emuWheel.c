@@ -50,9 +50,6 @@ static Atom prop_wheel_inertia  = 0;
 static Atom prop_wheel_timeout  = 0;
 static Atom prop_wheel_button   = 0;
 
-/* Local Funciton Prototypes */
-static int EvdevWheelEmuInertia(InputInfoPtr pInfo, WheelAxisPtr axis, int value);
-
 /* Filter mouse button events */
 BOOL
 EvdevWheelEmuFilterButton(InputInfoPtr pInfo, unsigned int button, int value)
@@ -95,7 +92,8 @@ BOOL
 EvdevWheelEmuFilterMotion(InputInfoPtr pInfo, struct input_event *pEv)
 {
     EvdevPtr pEvdev = (EvdevPtr)pInfo->private;
-    WheelAxisPtr pAxis = NULL, pOtherAxis = NULL;
+    WheelAxisPtr pAxis = NULL;
+    _X_UNUSED WheelAxisPtr pOtherAxis = NULL;
     int value = pEv->value;
 
     /* Has wheel emulation been configured to be enabled? */
@@ -147,11 +145,15 @@ EvdevWheelEmuFilterMotion(InputInfoPtr pInfo, struct input_event *pEv)
 	   wheel.  Reset the inertia of the other axis when a scroll event
 	   was sent to avoid the buildup of erroneous scroll events if the
 	   user doesn't move in a perfectly straight line.
+	   If the axis is not configured, simply eat the motion.
 	 */
-	if (pAxis)
+	if (pAxis && pAxis->up_button)
 	{
-	    if (EvdevWheelEmuInertia(pInfo, pAxis, value))
-		pOtherAxis->traveled_distance = 0;
+	    /* Simply queue scroll valuator events. The Y axis is flipped. */
+	    if (pAxis->code == REL_WHEEL)
+		EvdevQueueRelativeMotion(pInfo, pAxis->code, -value);
+	    else
+		EvdevQueueRelativeMotion(pInfo, pAxis->code, value);
 	}
 
 	/* Eat motion events while emulateWheel button pressed. */
@@ -159,40 +161,6 @@ EvdevWheelEmuFilterMotion(InputInfoPtr pInfo, struct input_event *pEv)
     }
 
     return FALSE;
-}
-
-/* Simulate inertia for our emulated mouse wheel.
-   Returns the number of wheel events generated.
- */
-static int
-EvdevWheelEmuInertia(InputInfoPtr pInfo, WheelAxisPtr axis, int value)
-{
-    EvdevPtr pEvdev = (EvdevPtr)pInfo->private;
-    int button;
-    int inertia;
-    int rc = 0;
-
-    /* if this axis has not been configured, just eat the motion */
-    if (!axis->up_button)
-	return rc;
-
-    axis->traveled_distance += value;
-
-    if (axis->traveled_distance < 0) {
-	button = axis->up_button;
-	inertia = -pEvdev->emulateWheel.inertia;
-    } else {
-	button = axis->down_button;
-	inertia = pEvdev->emulateWheel.inertia;
-    }
-
-    /* Produce button press events for wheel motion */
-    while(abs(axis->traveled_distance) > pEvdev->emulateWheel.inertia) {
-	axis->traveled_distance -= inertia;
-	EvdevQueueButtonClicks(pInfo, button, 1);
-	rc++;
-    }
-    return rc;
 }
 
 /* Handle button mapping here to avoid code duplication,
@@ -296,6 +264,10 @@ EvdevWheelEmuPreInit(InputInfoPtr pInfo)
 
     pEvdev->emulateWheel.timeout = timeout;
 
+    /* Default axes */
+    pEvdev->emulateWheel.Y.code = REL_WHEEL;
+    pEvdev->emulateWheel.X.code = REL_HWHEEL;
+
     /* Configure the Y axis or default it */
     if (!EvdevWheelEmuHandleButtonMap(pInfo, &(pEvdev->emulateWheel.Y),
                 "YAxisMapping")) {
@@ -357,6 +329,9 @@ EvdevWheelEmuSetProperty(DeviceIntPtr dev, Atom atom, XIPropertyValuePtr val,
                             16, PropModeReplace, 1,
                             &pEvdev->emulateWheel.inertia, TRUE);
             }
+
+            /* We might need to add/remove valuators for the scroll axes */
+            EvdevAddRelValuatorClass(dev, 2);
         }
     }
     else if (atom == prop_wheel_button)

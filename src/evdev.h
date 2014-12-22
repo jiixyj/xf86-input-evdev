@@ -119,6 +119,7 @@ enum ButtonAction {
 typedef struct {
     int up_button;
     int down_button;
+    int code;
     int traveled_distance;
 } WheelAxis, *WheelAxisPtr;
 
@@ -241,10 +242,14 @@ typedef struct {
     char *type_name;
 } EvdevRec, *EvdevPtr;
 
+/* (Re-)initialization */
+int EvdevAddRelValuatorClass(DeviceIntPtr device, int);
+
 /* Event posting functions */
 void EvdevQueueKbdEvent(InputInfoPtr pInfo, struct input_event *ev, int value);
 void EvdevQueueButtonEvent(InputInfoPtr pInfo, int button, int value);
 void EvdevQueueProximityEvent(InputInfoPtr pInfo, int value);
+void EvdevQueueRelativeMotion(InputInfoPtr pInfo, int code, int value);
 void EvdevQueueTouchEvent(InputInfoPtr pInfo, unsigned int touch,
                           ValuatorMask *mask, uint16_t type);
 void EvdevPostButtonEvent(InputInfoPtr pInfo, int button, enum ButtonAction act);

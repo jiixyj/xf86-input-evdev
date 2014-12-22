@@ -322,6 +322,21 @@ EvdevQueueButtonClicks(InputInfoPtr pInfo, int button, int count)
     }
 }
 
+void
+EvdevQueueRelativeMotion(InputInfoPtr pInfo, int code, int value)
+{
+    int map;
+    EvdevPtr pEvdev = (EvdevPtr)pInfo->private;
+
+    pEvdev->rel_queued = 1;
+    map = pEvdev->rel_axis_map[code];
+
+    if (valuator_mask_isset(pEvdev->rel_vals, map))
+        value += valuator_mask_get(pEvdev->rel_vals, map);
+
+    valuator_mask_set(pEvdev->rel_vals, map, value);
+}
+
 static void
 EvdevSwapAbsValuators(EvdevPtr pEvdev, ValuatorMask *mask)
 {
@@ -564,7 +579,6 @@ EvdevProcessRelativeMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
 {
     int value;
     EvdevPtr pEvdev = pInfo->private;
-    int map;
 
     /* Get the signed value, earlier kernels had this as unsigned */
     value = ev->value;
@@ -581,13 +595,7 @@ EvdevProcessRelativeMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
             if (EvdevWheelEmuFilterMotion(pInfo, ev))
                 return;
 
-            pEvdev->rel_queued = 1;
-            map = pEvdev->rel_axis_map[ev->code];
-
-            if (valuator_mask_isset(pEvdev->rel_vals, map))
-                value += valuator_mask_get(pEvdev->rel_vals, map);
-
-            valuator_mask_set(pEvdev->rel_vals, map, value);
+            EvdevQueueRelativeMotion(pInfo, ev->code, value);
             break;
     }
 }
@@ -1596,7 +1604,8 @@ EvdevSetScrollValuators(DeviceIntPtr device)
     return Success;
 }
 
-static int
+/* Note: Can be called multiple times if wheelEmulation.enabled changes */
+int
 EvdevAddRelValuatorClass(DeviceIntPtr device, int num_scroll_axes)
 {
     InputInfoPtr pInfo;
@@ -1633,6 +1642,9 @@ EvdevAddRelValuatorClass(DeviceIntPtr device, int num_scroll_axes)
 
     pEvdev->num_vals = num_axes;
     if (num_axes > 0) {
+        if(pEvdev->rel_vals)
+            valuator_mask_free(&pEvdev->rel_vals);
+
         pEvdev->rel_vals = valuator_mask_new(num_axes);
         if (!pEvdev->rel_vals)
             goto out;
@@ -1642,8 +1654,12 @@ EvdevAddRelValuatorClass(DeviceIntPtr device, int num_scroll_axes)
     for (axis = REL_X, map = 0; map < MAX_VALUATORS && axis <= REL_MAX; axis++)
     {
         pEvdev->rel_axis_map[axis] = -1;
-        if (!libevdev_has_event_code(pEvdev->dev, EV_REL, axis))
+        /* If wheel emulation is enabled, we need REL_WHEEL and REL_HWHEEL even
+         * if the device does not support them */
+        if (!libevdev_has_event_code(pEvdev->dev, EV_REL, axis)
+              && (!pEvdev->emulateWheel.enabled || (axis != REL_WHEEL && axis != REL_HWHEEL)))
             continue;
+
         pEvdev->rel_axis_map[axis] = map;
         map++;
     }
@@ -2061,7 +2077,7 @@ EvdevForceXY(InputInfoPtr pInfo, int mode)
 static int
 EvdevProbe(InputInfoPtr pInfo)
 {
-    int i, has_rel_axes, has_abs_axes, has_keys, num_buttons, has_scroll;
+    int i, has_rel_axes, has_abs_axes, has_keys, num_buttons;
     int has_lmr; /* left middle right */
     int has_mt; /* multitouch */
     int ignore_abs = 0, ignore_rel = 0;
@@ -2096,7 +2112,6 @@ EvdevProbe(InputInfoPtr pInfo)
     has_rel_axes = FALSE;
     has_abs_axes = FALSE;
     has_keys = FALSE;
-    has_scroll = FALSE;
     has_lmr = FALSE;
     has_mt = FALSE;
     num_buttons = 0;
@@ -2136,7 +2151,6 @@ EvdevProbe(InputInfoPtr pInfo)
             libevdev_has_event_code(pEvdev->dev, EV_REL, REL_HWHEEL) ||
             libevdev_has_event_code(pEvdev->dev, EV_REL, REL_DIAL)) {
             xf86IDrvMsg(pInfo, X_PROBED, "Found scroll wheel(s)\n");
-            has_scroll = TRUE;
             if (!num_buttons)
                 xf86IDrvMsg(pInfo, X_INFO,
                             "Forcing buttons for scroll wheel(s)\n");
@@ -2304,8 +2318,9 @@ EvdevProbe(InputInfoPtr pInfo)
         rc = 0;
     }
 
-    if (has_scroll &&
-        (has_rel_axes || has_abs_axes || num_buttons || has_keys))
+    /* Even if we do not have a scroll wheel, we might provide scroll axes
+     * through wheel emulation */
+    if (has_rel_axes || has_abs_axes || num_buttons || has_keys)
     {
         xf86IDrvMsg(pInfo, X_INFO, "Adding scrollwheel support\n");
         pEvdev->flags |= EVDEV_BUTTON_EVENTS;
